@@ -56,6 +56,7 @@ import android.annotation.RequiresPermission;
 import android.bluetooth.BluetoothA2dp;
 import android.bluetooth.BluetoothA2dpSink;
 import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothCsipSetCoordinator;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothHeadset;
 import android.bluetooth.BluetoothHearingAid;
@@ -82,9 +83,12 @@ import com.android.bluetooth.a2dpsink.A2dpSinkService;
 import com.android.bluetooth.apm.ApmConstIntf;
 import com.android.bluetooth.apm.MediaAudioIntf;
 import com.android.bluetooth.apm.CallAudioIntf;
+import com.android.bluetooth.groupclient.GroupService;
+import android.bluetooth.DeviceGroup;
 import com.android.bluetooth.btservice.InteropUtil;
 import com.android.bluetooth.btservice.storage.DatabaseManager;
 import com.android.bluetooth.CsipWrapper;
+import com.android.bluetooth.csip.CsipSetCoordinatorService;
 import com.android.bluetooth.hearingaid.HearingAidService;
 import com.android.bluetooth.hfp.HeadsetService;
 import com.android.bluetooth.hid.HidHostService;
@@ -103,6 +107,7 @@ import java.lang.reflect.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Objects;
 
 // Describes the phone policy
@@ -208,6 +213,11 @@ class PhonePolicy {
                 case BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED:
                     mHandler.obtainMessage(MESSAGE_PROFILE_CONNECTION_STATE_CHANGED,
                             BluetoothProfile.A2DP, -1, // No-op argument
+                            intent).sendToTarget();
+                    break;
+                case BluetoothCsipSetCoordinator.ACTION_CSIS_CONNECTION_STATE_CHANGED:
+                    mHandler.obtainMessage(MESSAGE_PROFILE_CONNECTION_STATE_CHANGED,
+                            BluetoothProfile.CSIP_SET_COORDINATOR, -1, // No-op argument
                             intent).sendToTarget();
                     break;
                 case BluetoothA2dpSink.ACTION_CONNECTION_STATE_CHANGED:
@@ -367,6 +377,7 @@ class PhonePolicy {
         filter.addAction(BluetoothHearingAid.ACTION_ACTIVE_DEVICE_CHANGED);
         filter.addAction(BC_ACTION_CONNECTION_STATE_CHANGED);
         filter.addAction(BluetoothLeAudio.ACTION_LE_AUDIO_CONNECTION_STATE_CHANGED);
+        filter.addAction(BluetoothCsipSetCoordinator.ACTION_CSIS_CONNECTION_STATE_CHANGED);
         filter.addAction(BluetoothLeAudio.ACTION_LE_AUDIO_ACTIVE_DEVICE_CHANGED);
         filter.addAction(BluetoothVolumeControl.ACTION_CONNECTION_STATE_CHANGED);
         mAdapterService.registerReceiver(mReceiver, filter);
@@ -425,6 +436,8 @@ class PhonePolicy {
         PanService panService = mFactory.getPanService();
         HearingAidService hearingAidService = mFactory.getHearingAidService();
         LeAudioService leAudioService = mFactory.getLeAudioService();
+        CsipSetCoordinatorService csipSetCooridnatorService =
+            mFactory.getCsipSetCoordinatorService();
         VolumeControlService volumeControlService = mFactory.getVolumeControlService();
         boolean isQtiLeAudioEnabled = ApmConstIntf.getQtiLeAudioEnabled();
         boolean isAospLeAudioEnabled = ApmConstIntf.getAospLeaEnabled();
@@ -478,6 +491,14 @@ class PhonePolicy {
             mAdapterService.getDatabase().setProfileConnectionPolicy(device,
                     BluetoothProfile.A2DP, BluetoothProfile.CONNECTION_POLICY_ALLOWED);
             }
+        }
+
+        if ((csipSetCooridnatorService != null)
+                && (ArrayUtils.contains(uuids, BluetoothUuid.COORDINATED_SET))
+                && (csipSetCooridnatorService.getConnectionPolicy(device)
+                        == BluetoothProfile.CONNECTION_POLICY_UNKNOWN)) {
+            mAdapterService.getDatabase().setProfileConnectionPolicy(device,
+                    BluetoothProfile.CSIP_SET_COORDINATOR,BluetoothProfile.CONNECTION_POLICY_ALLOWED);
         }
 
         if ((a2dpSinkService != null)
@@ -587,7 +608,8 @@ class PhonePolicy {
             (profileId == BluetoothProfile.HEADSET) ||
             (profileId == BluetoothProfile.A2DP_SINK) ||
             (profileId == BluetoothProfile.BC_PROFILE) ||
-            (profileId == BluetoothProfile.LE_AUDIO)) {
+            (profileId == BluetoothProfile.LE_AUDIO) ||
+            (profileId == BluetoothProfile.CSIP_SET_COORDINATOR)) {
             BluetoothDevice peerTwsDevice =
                     (mAdapterService != null && mAdapterService.isTwsPlusDevice(device)) ?
                     mAdapterService.getTwsPlusPeerDevice(device):null;
@@ -755,6 +777,8 @@ class PhonePolicy {
         PanService panService = mFactory.getPanService();
         A2dpSinkService a2dpSinkService = mFactory.getA2dpSinkService();
         LeAudioService leAudioService = mFactory.getLeAudioService();
+        CsipSetCoordinatorService csipSetCooridnatorService =
+            mFactory.getCsipSetCoordinatorService();
         boolean isQtiLeAudioEnabled = ApmConstIntf.getQtiLeAudioEnabled();
 
         if (hsService != null) {
@@ -771,6 +795,11 @@ class PhonePolicy {
             List<BluetoothDevice> a2dpSinkConnDevList = a2dpSinkService.getConnectedDevices();
             allProfilesEmpty &= a2dpSinkConnDevList.isEmpty();
             atLeastOneProfileConnectedForDevice |= a2dpSinkConnDevList.contains(device);
+        }
+        if (csipSetCooridnatorService != null) {
+            List<BluetoothDevice> csipConnDevList = csipSetCooridnatorService.getConnectedDevices();
+            allProfilesEmpty &= csipConnDevList.isEmpty();
+            atLeastOneProfileConnectedForDevice |= csipConnDevList.contains(device);
         }
         if (panService != null) {
             List<BluetoothDevice> panConnDevList = panService.getConnectedDevices();
@@ -881,6 +910,9 @@ class PhonePolicy {
                     mostRecentlyActiveA2dpDevice + " attempting auto connection for A2DP, HFP");
                 autoConnectHeadset(mostRecentlyActiveA2dpDevice);
                 autoConnectA2dp(mostRecentlyActiveA2dpDevice);
+                debugLog("autoConnect: attempting auto connection for recently"+
+                        " connected HID device:" + mostRecentlyConnectedA2dpSrcDevice);
+                autoConnectHidHost(mostRecentlyActiveA2dpDevice);
                 if (peerTwsDevice != null) {
                     debugLog("autoConnect: 2nd pair TWS+ EB");
                     autoConnectHeadset(peerTwsDevice);
@@ -891,6 +923,9 @@ class PhonePolicy {
                      " recently connected HFP Device " + mostRecentlyActiveHfpDevice
                     + " attempting auto connection for HFP");
                 autoConnectHeadset(mostRecentlyActiveHfpDevice);
+                debugLog("autoConnect: attempting auto connection for recently"+
+                        " connected HID device:" + mostRecentlyActiveHfpDevice);
+                autoConnectHidHost(mostRecentlyActiveHfpDevice);
                 if (peerTwsDevice != null) {
                     debugLog("autoConnectHF: 2nd pair TWS+ EB");
                     autoConnectHeadset(peerTwsDevice);
@@ -992,6 +1027,23 @@ class PhonePolicy {
         }
     }
 
+    @RequiresPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+    private void autoConnectHidHost(BluetoothDevice device) {
+        final HidHostService hidHostService = mFactory.getHidHostService();
+        if (hidHostService == null) {
+            warnLog("autoConnectHidHost: service is null, failed to connect to " + device);
+            return;
+        }
+        int hidHostConnectionPolicy = hidHostService.getConnectionPolicy(device);
+        if (hidHostConnectionPolicy == BluetoothProfile.CONNECTION_POLICY_ALLOWED) {
+            debugLog("autoConnectHidHost: Connecting HID with " + device);
+            hidHostService.connect(device);
+        } else {
+            debugLog("autoConnectHidHost: skipped auto-connect HID with device " + device
+                    + " connectionPolicy " + hidHostConnectionPolicy);
+        }
+    }
+
     private void autoConnectA2dpSink(BluetoothDevice device) {
         A2dpSinkService a2dpSinkService = A2dpSinkService.getA2dpSinkService();
         if (a2dpSinkService == null) {
@@ -1024,8 +1076,28 @@ class PhonePolicy {
             }
             final BluetoothDevice mostRecentlyActiveA2dpDevice =
                 mDatabaseManager.getMostRecentlyConnectedA2dpDevice();
-            if (Objects.equals(mostRecentlyActiveA2dpDevice, device))
-                connectBC(device);
+            if (Objects.equals(mostRecentlyActiveA2dpDevice, device)) {
+                GroupService setCoordinator = GroupService.getGroupService();
+                List<BluetoothDevice> listOfDevices = new ArrayList<BluetoothDevice>();
+                if (setCoordinator != null) {
+                    int setId = setCoordinator.getRemoteDeviceGroupId(device, null);
+                    DeviceGroup devGrp = setCoordinator.getCoordinatedSet(setId);
+                    if (devGrp != null) {
+                        listOfDevices = devGrp.getDeviceGroupMembers();
+                    } else {
+                        Log.d(TAG, "Failed to get dev Group instance");
+                        listOfDevices.add(device);
+                    }
+                } else {
+                    Log.d(TAG, "Fail to get CSIP instance");
+                    listOfDevices.add(device);
+                }
+
+                for (BluetoothDevice dev : listOfDevices) {
+                    Log.d(TAG, "connectBC : " + dev);
+                    connectBC(dev);
+                }
+            }
         }
     }
     private void connectBC(BluetoothDevice device) {
@@ -1117,7 +1189,9 @@ class PhonePolicy {
         A2dpService a2dpService = mFactory.getA2dpService();
         PanService panService = mFactory.getPanService();
         A2dpSinkService a2dpSinkService = mFactory.getA2dpSinkService();
+        HidHostService hidHostService = mFactory.getHidHostService();
         LeAudioService leAudioService = mFactory.getLeAudioService();
+        CsipSetCoordinatorService csipSetCooridnatorService = mFactory.getCsipSetCoordinatorService();
         VolumeControlService volumeControlService = mFactory.getVolumeControlService();
         boolean isQtiLeAudioEnabled = ApmConstIntf.getQtiLeAudioEnabled();
 
@@ -1241,6 +1315,17 @@ class PhonePolicy {
                 panService.connect(device);
             }
         }
+        if (csipSetCooridnatorService != null) {
+            List<BluetoothDevice> csipConnDevList = csipSetCooridnatorService.getConnectedDevices();
+            if (!csipConnDevList.contains(device)
+                    && (csipSetCooridnatorService.getConnectionPolicy(device)
+                    == BluetoothProfile.CONNECTION_POLICY_ALLOWED)
+                    && (csipSetCooridnatorService.getConnectionState(device)
+                    == BluetoothProfile.STATE_DISCONNECTED)) {
+                debugLog("Retrying connection to CSIP with device " + device);
+                csipSetCooridnatorService.connect(csipSetCooridnatorService.getAppId(),device);
+            }
+        }
         // Connect A2DP Sink Service if HS is connected
         if (a2dpSinkService != null) {
             List<BluetoothDevice> sinkConnDevList = a2dpSinkService.getConnectedDevices();
@@ -1252,6 +1337,16 @@ class PhonePolicy {
                          hsService.getConnectionPolicy(device) == BluetoothProfile.CONNECTION_POLICY_FORBIDDEN))) {
                 debugLog("Retrying connection for A2dpSink with device " + device);
                 a2dpSinkService.connect(device);
+            }
+        }
+
+         if (hidHostService != null) {
+            if ((hidHostService.getConnectionPolicy(device)
+                    == BluetoothProfile.CONNECTION_POLICY_ALLOWED)
+                    && (hidHostService.getConnectionState(device)
+                    == BluetoothProfile.STATE_DISCONNECTED)) {
+                debugLog("Retrying connection to HID with device " + device);
+                hidHostService.connect(device);
             }
         }
 
