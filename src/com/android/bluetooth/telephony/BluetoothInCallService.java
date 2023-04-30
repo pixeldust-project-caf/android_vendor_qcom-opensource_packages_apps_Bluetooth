@@ -744,14 +744,16 @@ public class BluetoothInCallService extends InCallService {
     @Override
     public void onDestroy() {
         Log.d(TAG, "onDestroy");
-        if (mBluetoothAdapterReceiver != null) {
-            unregisterReceiver(mBluetoothAdapterReceiver);
-            mBluetoothAdapterReceiver = null;
-        }
-        if (mBluetoothHeadset != null) {
-            mBluetoothHeadset.closeBluetoothHeadsetProxy(this);
-            mBluetoothHeadset = null;
-        }
+        synchronized (LOCK) {
+          if (mBluetoothAdapterReceiver != null) {
+              unregisterReceiver(mBluetoothAdapterReceiver);
+              mBluetoothAdapterReceiver = null;
+          }
+          if (mBluetoothHeadset != null) {
+              mBluetoothHeadset.closeBluetoothHeadsetProxy(this);
+              mBluetoothHeadset = null;
+          }
+        }//synchronized (LOCK)
         mServiceCreated = false;
         super.onDestroy();
     }
@@ -1011,7 +1013,8 @@ public class BluetoothInCallService extends InCallService {
                 heldCall.unhold();
                 return true;
             } else if (!mCallInfo.isNullCall(activeCall)
-                    && activeCall.can(Connection.CAPABILITY_HOLD)) {
+                    && (activeCall.can(Connection.CAPABILITY_HOLD)
+                    ||  activeCall.can(Connection.CAPABILITY_SUPPORT_HOLD))) {
                 activeCall.hold();
                 return true;
             }
@@ -1099,8 +1102,8 @@ public class BluetoothInCallService extends InCallService {
                 }
             }
         }
-
-        if (mBluetoothHeadset != null
+        synchronized (LOCK) {
+          if (mBluetoothHeadset != null
                 && (force
                     || (!callsPendingSwitch
                         && (numActiveCalls != mNumActiveCalls
@@ -1156,7 +1159,8 @@ public class BluetoothInCallService extends InCallService {
                     ringingName);
 
             mHeadsetUpdatedRecently = true;
-        }
+          }
+        }//synchronized (LOCK)
     }
 
     private int getBluetoothCallStateForUpdate() {
