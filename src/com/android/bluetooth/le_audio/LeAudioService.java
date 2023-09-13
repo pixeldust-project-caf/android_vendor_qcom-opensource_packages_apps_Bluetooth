@@ -449,18 +449,23 @@ public class LeAudioService extends ProfileService {
 
         Log.d(TAG, "connect(): mPtsMediaAndVoice: " + mPtsMediaAndVoice +
                    ", mPtsTmapConfBandC: " + mPtsTmapConfBandC);
-
         if (!mPtsTmapConfBandC &&
-            (mPtsMediaAndVoice == 2 || mPtsMediaAndVoice == 3)) {
-            if (mCallAudio != null) {
-                mCallAudio.connect(device);
+            (mPtsMediaAndVoice == 1 || mPtsMediaAndVoice == 3)) {
+            if (mMediaAudio != null) {
+                if (mPtsMediaAndVoice == 3)
+                  mMediaAudio.connect(device, true);
+                else
+                  mMediaAudio.connect(device);
             }
         }
 
         if (!mPtsTmapConfBandC &&
-            (mPtsMediaAndVoice == 1 || mPtsMediaAndVoice == 3)) {
-            if (mMediaAudio != null) {
-                mMediaAudio.connect(device);
+            mPtsMediaAndVoice == 2) {
+            if (mCallAudio != null) {
+                Log.d(TAG, "connect(): Connecting call AUdio");
+                mCallAudio.connect(device);
+            } else {
+                Log.d(TAG, "call AUdio is null");
             }
         }
 
@@ -1167,12 +1172,57 @@ public class LeAudioService extends ProfileService {
             setActiveDeviceGroup(device);
             return true;
         }*/
+        Log.d(TAG, "setActiveDevice() for device: " + device +
+                   ", mPreviousActiveDevice: " + mPreviousActiveDevice);
+        DeviceProfileMap dpm = DeviceProfileMap.getDeviceProfileMapInstance();
+        if (dpm == null) {
+            Log.w(TAG, "setActiveDevice: dpm is null, return.");
+            return false;
+        }
+        BluetoothDevice fetchCurrentActiveDevice = null;
+
+        if (device == null) {
+            fetchCurrentActiveDevice = mPreviousActiveDevice;
+            mPreviousActiveDevice = null;
+        } else {
+            fetchCurrentActiveDevice = device;
+        }
+
+        int MediaProfID = dpm.getSupportedProfile(fetchCurrentActiveDevice,
+                                           ApmConst.AudioFeatures.MEDIA_AUDIO);
+        int VoiceProfID = dpm.getSupportedProfile(fetchCurrentActiveDevice,
+                                            ApmConst.AudioFeatures.CALL_AUDIO);
+        Log.d(TAG, "setActiveDevice: "+ " MediaProfID:" + MediaProfID +
+                   ", VoiceProfID:" + VoiceProfID);
+
+        mPreviousActiveDevice = device;
+        CallAudioIntf mCallAudio = CallAudioIntf.get();
+        boolean isInCall =
+                mCallAudio != null && mCallAudio.isVoiceOrCallActive();
+
         ActiveDeviceManagerServiceIntf activeDeviceManager =
                                             ActiveDeviceManagerServiceIntf.get();
-        activeDeviceManager.setActiveDevice(device,
-                                            ApmConstIntf.AudioFeatures.CALL_AUDIO);
-        activeDeviceManager.setActiveDevice(device,
-                                            ApmConstIntf.AudioFeatures.MEDIA_AUDIO);
+        if (((ApmConst.AudioProfiles.BAP_CALL & VoiceProfID) ==
+                                          ApmConst.AudioProfiles.BAP_CALL)) {
+            if (isInCall) {
+                activeDeviceManager.setActiveDeviceBlocking(device,
+                                                ApmConstIntf.AudioFeatures.CALL_AUDIO);
+            } else {
+                activeDeviceManager.setActiveDevice(device,
+                                             ApmConstIntf.AudioFeatures.CALL_AUDIO);
+            }
+        }
+
+        if (((ApmConst.AudioProfiles.BAP_MEDIA & MediaProfID) ==
+                                         ApmConst.AudioProfiles.BAP_MEDIA)) {
+            if (isInCall) {
+                activeDeviceManager.setActiveDeviceBlocking(device,
+                                             ApmConstIntf.AudioFeatures.MEDIA_AUDIO);
+            } else {
+                activeDeviceManager.setActiveDevice(device,
+                                          ApmConstIntf.AudioFeatures.MEDIA_AUDIO);
+            }
+        }
         return true;
     }
 
